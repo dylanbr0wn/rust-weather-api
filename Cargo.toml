@@ -1,0 +1,22 @@
+[package]
+name = "rust-weather-api"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+colorgrad = "0.6.1"
+contour = "0.5.0"
+friedrich = "0.4.1"
+geo = "0.22.1"
+geojson = "0.23.0"
+iter_num_tools = "0.6.2"
+mongodb = {version = "2.3.0", features = ["tokio-sync"]}
+reqwest = { version = "0.11.11", features = ["blocking"] }
+serde = "1.0.141"
+serde_json = "1.0.82"
+xml2json-rs = "1.0.0"
+dotenv = "0.15.0"
+tokio = {version ="1.20.1", features= ["time"]}
+
