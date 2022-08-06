@@ -1,4 +1,4 @@
-use geojson::FeatureCollection;
+use geojson::{Feature, FeatureCollection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -64,4 +64,12 @@ pub struct Conditions {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Intersection {
     pub intersection: FeatureCollection,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Points {
+    pub points: FeatureCollection,
+    pub average_temp: f64,
+    pub max_point: Feature,
+    pub min_point: Feature,
 }

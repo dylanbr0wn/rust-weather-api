@@ -2,13 +2,16 @@ pub mod types;
 use crate::types::ConditionsWrapper;
 use contour::ContourBuilder;
 use friedrich::{gaussian_process::GaussianProcess, kernel::Exponential};
-use geo::{BooleanOps, BoundingRect, Coordinate, LineString, MapCoords, MultiPolygon, Polygon};
+use geo::{
+    BooleanOps, BoundingRect, Coordinate, LineString, MapCoords, MultiPolygon, Point, Polygon,
+};
 use geojson::{Feature, FeatureCollection, Value};
 use iter_num_tools::{arange_grid, lin_space};
 use mongodb::{bson::doc, Client};
+use serde_json::json;
 use std::error::Error;
 use tokio::time::{self, Duration, Instant};
-use types::{Intersection, Station};
+use types::{Intersection, Points, Station};
 use xml2json_rs::JsonConfig;
 
 const NUMBER_OF_BANDS: usize = 15;
@@ -18,20 +21,17 @@ const MODEL_NOISE: f64 = 0.01;
 const MAX_LAT: f64 = 60.0;
 const WAIT_TIME: u64 = 60;
 
-fn filter_observations(observations: &Vec<Station>) -> Vec<&Station> {
-    let mut filtered_observations = Vec::new();
-    for observation in observations {
-        if observation.temperature.is_some()
-            && (observation.latitude.parse::<f64>().unwrap() < MAX_LAT)
-        {
-            let temp = observation;
-            filtered_observations.push(temp);
-        }
-    }
-    filtered_observations
+fn filter_observations(observations: &mut Vec<Station>) -> Vec<Station> {
+    observations
+        .drain(..)
+        .filter(|observation| {
+            observation.temperature.is_some()
+                && (observation.latitude.parse::<f64>().unwrap() < MAX_LAT)
+        })
+        .collect()
 }
 
-fn get_coordinates(stations: &Vec<&Station>) -> Result<Vec<Vec<f64>>, Box<dyn Error>> {
+fn get_coordinates(stations: &Vec<Station>) -> Result<Vec<Vec<f64>>, Box<dyn Error>> {
     let mut coordinates = Vec::new();
     for station in stations {
         let lat = station.latitude.parse::<f64>()?;
@@ -41,7 +41,7 @@ fn get_coordinates(stations: &Vec<&Station>) -> Result<Vec<Vec<f64>>, Box<dyn Er
     Ok(coordinates)
 }
 
-fn get_temperatures(stations: &Vec<&Station>) -> Result<Vec<f64>, Box<dyn Error>> {
+fn get_temperatures(stations: &Vec<Station>) -> Result<Vec<f64>, Box<dyn Error>> {
     let mut temperatures = Vec::new();
     for station in stations {
         match &station.temperature {
@@ -67,7 +67,7 @@ pub fn remap_y(curr: f64, max: f64, new_min: f64, new_max: f64) -> f64 {
     new_min + ((curr / max) * (new_max - new_min))
 }
 
-pub async fn store_mongo(data: &Intersection) -> mongodb::error::Result<()> {
+pub async fn store_intersection(data: &Intersection) -> mongodb::error::Result<()> {
     let user = std::env::var("MONGO_USER").unwrap();
     let password = std::env::var("MONGO_PASS").unwrap();
 
@@ -85,6 +85,99 @@ pub async fn store_mongo(data: &Intersection) -> mongodb::error::Result<()> {
         .await?;
 
     Ok(())
+}
+
+pub async fn store_points(data: &Points) -> mongodb::error::Result<()> {
+    let user = std::env::var("MONGO_USER").unwrap();
+    let password = std::env::var("MONGO_PASS").unwrap();
+
+    let uri = format!(
+        "mongodb+srv://{}:{}@victoria-weather.hzivz.mongodb.net/?retryWrites=true&w=majority",
+        user, password
+    );
+
+    let client = Client::with_uri_str(uri).await?;
+    let database = client.database("weather-test");
+    let collection = database.collection::<Points>("points-data");
+    let inserted = collection.insert_one(data, None).await?;
+    collection
+        .delete_many(doc! {"_id": { "$ne": inserted.inserted_id }}, None)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn compute_points() -> Result<Vec<Station>, Box<dyn Error>> {
+    let mut max_point: Option<Feature> = None;
+    let mut min_point: Option<Feature> = None;
+
+    let mut max_temp = -100.0;
+    let mut min_temp = 100.0;
+
+    let mut avg_temp = 0.0;
+    let mut reporting_count = 0;
+
+    let body = reqwest::get("https://www.victoriaweather.ca/stations/latest/allcurrent.xml")
+        .await?
+        .text()
+        .await?;
+
+    //Now we can parse the data
+
+    let json_builder = JsonConfig::new().explicit_array(false).finalize();
+    let val = json_builder.build_from_xml(&body)?;
+
+    let mut conditions: ConditionsWrapper = serde_json::from_value(val).unwrap();
+
+    let current_observations =
+        filter_observations(&mut conditions.current_conditions.current_observation);
+
+    let points_data: Vec<Feature> = current_observations
+        .iter()
+        .map(|x| {
+            let mut feat = Feature::from(Value::from(&Point::new(
+                x.longitude.parse::<f64>().unwrap(),
+                x.latitude.parse::<f64>().unwrap(),
+            )));
+            feat.properties = Some(json!(x).as_object().unwrap().to_owned());
+
+            let temp = x.temperature.as_ref().unwrap().parse::<f64>().unwrap();
+
+            avg_temp += temp;
+            reporting_count += 1;
+            if temp > max_temp {
+                max_temp = temp;
+                max_point = Some(feat.clone());
+            }
+            if temp < min_temp {
+                min_temp = temp;
+                min_point = Some(feat.clone());
+            }
+
+            feat
+        })
+        .collect();
+
+    avg_temp /= reporting_count as f64;
+
+    let feat_col = FeatureCollection {
+        features: points_data,
+        bbox: None,
+        foreign_members: None,
+    };
+
+    let points = Points {
+        points: feat_col,
+        average_temp: avg_temp,
+        min_point: min_point.unwrap(),
+        max_point: max_point.unwrap(),
+    };
+
+    match store_points(&points).await {
+        Ok(_) => (),
+        Err(e) => println!("{}", e),
+    }
+    Ok(current_observations)
 }
 
 pub async fn compute() -> Result<(), Box<dyn Error>> {
@@ -140,20 +233,7 @@ pub async fn compute() -> Result<(), Box<dyn Error>> {
 
     //now we need to get the observations
 
-    let body = reqwest::get("https://www.victoriaweather.ca/stations/latest/allcurrent.xml")
-        .await?
-        .text()
-        .await?;
-
-    //Now we can parse the data
-
-    let json_builder = JsonConfig::new().explicit_array(false).finalize();
-    let val = json_builder.build_from_xml(&body)?;
-
-    let conditions: ConditionsWrapper = serde_json::from_value(val).unwrap();
-
-    let current_observations =
-        filter_observations(&conditions.current_conditions.current_observation);
+    let current_observations = compute_points().await?;
 
     let coords = get_coordinates(&current_observations)?;
     let temps = get_temperatures(&current_observations)?;
@@ -236,7 +316,7 @@ pub async fn compute() -> Result<(), Box<dyn Error>> {
             foreign_members: None,
         },
     };
-    match store_mongo(&fc).await {
+    match store_intersection(&fc).await {
         Ok(_) => (),
         Err(e) => println!("{}", e),
     }
