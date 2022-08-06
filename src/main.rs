@@ -11,7 +11,7 @@ use mongodb::{bson::doc, Client};
 use serde_json::json;
 use std::error::Error;
 use tokio::time::{self, Duration, Instant};
-use types::{Intersection, Points, Station};
+use types::{Intersection, Points, Rain, Station};
 use xml2json_rs::JsonConfig;
 
 const NUMBER_OF_BANDS: usize = 15;
@@ -19,7 +19,7 @@ const COORDINATE_STEP_X: f64 = 0.01;
 const COORDINATE_STEP_Y: f64 = 0.01;
 const MODEL_NOISE: f64 = 0.01;
 const MAX_LAT: f64 = 60.0;
-const WAIT_TIME: u64 = 60;
+const WAIT_TIME: u64 = 5;
 
 fn filter_observations(observations: &mut Vec<Station>) -> Vec<Station> {
     observations
@@ -67,16 +67,10 @@ pub fn remap_y(curr: f64, max: f64, new_min: f64, new_max: f64) -> f64 {
     new_min + ((curr / max) * (new_max - new_min))
 }
 
-pub async fn store_intersection(data: &Intersection) -> mongodb::error::Result<()> {
-    let user = std::env::var("MONGO_USER").unwrap();
-    let password = std::env::var("MONGO_PASS").unwrap();
-
-    let uri = format!(
-        "mongodb+srv://{}:{}@victoria-weather.hzivz.mongodb.net/?retryWrites=true&w=majority",
-        user, password
-    );
-
-    let client = Client::with_uri_str(uri).await?;
+pub async fn store_intersection(
+    data: &Intersection,
+    client: &Client,
+) -> mongodb::error::Result<()> {
     let database = client.database("weather-test");
     let collection = database.collection::<Intersection>("intersection");
     let inserted = collection.insert_one(data, None).await?;
@@ -87,16 +81,7 @@ pub async fn store_intersection(data: &Intersection) -> mongodb::error::Result<(
     Ok(())
 }
 
-pub async fn store_points(data: &Points) -> mongodb::error::Result<()> {
-    let user = std::env::var("MONGO_USER").unwrap();
-    let password = std::env::var("MONGO_PASS").unwrap();
-
-    let uri = format!(
-        "mongodb+srv://{}:{}@victoria-weather.hzivz.mongodb.net/?retryWrites=true&w=majority",
-        user, password
-    );
-
-    let client = Client::with_uri_str(uri).await?;
+pub async fn store_points(data: &Points, client: &Client) -> mongodb::error::Result<()> {
     let database = client.database("weather-test");
     let collection = database.collection::<Points>("points-data");
     let inserted = collection.insert_one(data, None).await?;
@@ -107,7 +92,31 @@ pub async fn store_points(data: &Points) -> mongodb::error::Result<()> {
     Ok(())
 }
 
-pub async fn compute_points() -> Result<Vec<Station>, Box<dyn Error>> {
+pub async fn get_mongo_client() -> Result<Client, Box<dyn Error>> {
+    let user = std::env::var("MONGO_USER").unwrap();
+    let password = std::env::var("MONGO_PASS").unwrap();
+
+    let uri = format!(
+        "mongodb+srv://{}:{}@victoria-weather.hzivz.mongodb.net/?retryWrites=true&w=majority",
+        user, password
+    );
+
+    let client = Client::with_uri_str(uri).await?;
+    Ok(client)
+}
+
+pub async fn store_rain(data: &Rain, client: &Client) -> mongodb::error::Result<()> {
+    let database = client.database("weather-test");
+    let collection = database.collection::<Rain>("rain-stats");
+    let inserted = collection.insert_one(data, None).await?;
+    collection
+        .delete_many(doc! {"_id": { "$ne": inserted.inserted_id }}, None)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Error>> {
     let mut max_point: Option<Feature> = None;
     let mut min_point: Option<Feature> = None;
 
@@ -116,6 +125,12 @@ pub async fn compute_points() -> Result<Vec<Station>, Box<dyn Error>> {
 
     let mut avg_temp = 0.0;
     let mut reporting_count = 0;
+
+    let mut rain_total = 0.0;
+    let mut rain_reporting_count = 0;
+
+    let mut max_rain = 0.0;
+    let mut max_rain_point: Option<Feature> = None;
 
     let body = reqwest::get("https://www.victoriaweather.ca/stations/latest/allcurrent.xml")
         .await?
@@ -154,9 +169,34 @@ pub async fn compute_points() -> Result<Vec<Station>, Box<dyn Error>> {
                 min_point = Some(feat.clone());
             }
 
+            if let Some(rain) = &x.rain {
+                let rain = rain.parse::<f64>().unwrap();
+                if rain > max_rain {
+                    max_rain = rain;
+                    max_rain_point = Some(feat.clone());
+                }
+                rain_total += rain;
+            }
+            if let Some(_) = &x.rain_rate {
+                rain_reporting_count += 1;
+            }
+
             feat
         })
         .collect();
+
+    let avg_rain = rain_total / rain_reporting_count as f64;
+
+    let rain = Rain {
+        max_rain: max_rain_point,
+        average_rain: avg_rain,
+        number_reporting: rain_reporting_count,
+    };
+
+    match store_rain(&rain, client).await {
+        Ok(_) => (),
+        Err(e) => println!("{}", e),
+    }
 
     avg_temp /= reporting_count as f64;
 
@@ -173,14 +213,14 @@ pub async fn compute_points() -> Result<Vec<Station>, Box<dyn Error>> {
         max_point: max_point.unwrap(),
     };
 
-    match store_points(&points).await {
+    match store_points(&points, client).await {
         Ok(_) => (),
         Err(e) => println!("{}", e),
     }
     Ok(current_observations)
 }
 
-pub async fn compute() -> Result<(), Box<dyn Error>> {
+pub async fn compute(client: &Client) -> Result<(), Box<dyn Error>> {
     let island: Vec<[f64; 2]> = vec![
         [-125.67796453456866, 48.82645842964928],
         [-124.74626480947109, 48.53388081242173],
@@ -233,7 +273,7 @@ pub async fn compute() -> Result<(), Box<dyn Error>> {
 
     //now we need to get the observations
 
-    let current_observations = compute_points().await?;
+    let current_observations = compute_points(client).await?;
 
     let coords = get_coordinates(&current_observations)?;
     let temps = get_temperatures(&current_observations)?;
@@ -316,7 +356,7 @@ pub async fn compute() -> Result<(), Box<dyn Error>> {
             foreign_members: None,
         },
     };
-    match store_intersection(&fc).await {
+    match store_intersection(&fc, client).await {
         Ok(_) => (),
         Err(e) => println!("{}", e),
     }
@@ -326,6 +366,8 @@ pub async fn compute() -> Result<(), Box<dyn Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let client = get_mongo_client().await?;
+
     let sleep = time::sleep(Duration::from_secs(WAIT_TIME));
     tokio::pin!(sleep);
 
@@ -334,7 +376,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             () = &mut sleep => {
                 let now = Instant::now();
 
-                 match compute().await {
+                 match compute(&client).await {
                   Ok(_) => {
                     let elapsed_time = now.elapsed();
                     println!("Database updated, took {} seconds", elapsed_time.as_secs());

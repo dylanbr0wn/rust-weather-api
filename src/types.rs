@@ -73,3 +73,10 @@ pub struct Points {
     pub max_point: Feature,
     pub min_point: Feature,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Rain {
+    pub max_rain: Option<Feature>,
+    pub average_rain: f64,
+    pub number_reporting: i64,
+}
