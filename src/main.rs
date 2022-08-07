@@ -171,14 +171,18 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Err
 
             if let Some(rain) = &x.rain {
                 let rain = rain.parse::<f64>().unwrap();
+
                 if rain > max_rain {
                     max_rain = rain;
                     max_rain_point = Some(feat.clone());
                 }
                 rain_total += rain;
             }
-            if let Some(_) = &x.rain_rate {
-                rain_reporting_count += 1;
+            if let Some(_rate) = &x.rain_rate {
+                let rate = _rate.parse::<f64>().unwrap();
+                if rate > 0.0 {
+                    rain_reporting_count += 1;
+                }
             }
 
             feat
