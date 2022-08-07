@@ -158,6 +158,8 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Err
 
             let temp = x.temperature.as_ref().unwrap().parse::<f64>().unwrap();
 
+            feat.set_property("temperature", temp);
+
             avg_temp += temp;
             reporting_count += 1;
             if temp > max_temp {
