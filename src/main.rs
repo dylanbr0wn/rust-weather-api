@@ -19,7 +19,7 @@ const COORDINATE_STEP_X: f64 = 0.01;
 const COORDINATE_STEP_Y: f64 = 0.01;
 const MODEL_NOISE: f64 = 0.01;
 const MAX_LAT: f64 = 60.0;
-const WAIT_TIME: u64 = 5;
+const WAIT_TIME: u64 = 60;
 
 fn filter_observations(observations: &mut Vec<Station>) -> Vec<Station> {
     observations
