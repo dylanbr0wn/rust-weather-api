@@ -151,8 +151,8 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Err
         .iter()
         .map(|x| {
             let mut feat = Feature::from(Value::from(&Point::new(
-                x.longitude.parse::<f64>().unwrap(),
-                x.latitude.parse::<f64>().unwrap() - 360.0,
+                x.longitude.parse::<f64>().unwrap() - 360.0,
+                x.latitude.parse::<f64>().unwrap(),
             )));
             feat.properties = Some(json!(x).as_object().unwrap().to_owned());
 
