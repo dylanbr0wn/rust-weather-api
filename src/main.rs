@@ -1,6 +1,9 @@
 pub mod types;
 use crate::types::ConditionsWrapper;
+use anyhow::{Error, Result};
+use axiom_rs;
 use contour::ContourBuilder;
+use dotenvy::dotenv;
 use friedrich::{gaussian_process::GaussianProcess, kernel::Exponential};
 use geo::{
     BooleanOps, BoundingRect, Coordinate, LineString, MapCoords, MultiPolygon, Point, Polygon,
@@ -9,7 +12,6 @@ use geojson::{Feature, FeatureCollection, Value};
 use iter_num_tools::{arange_grid, lin_space};
 use mongodb::{bson::doc, Client};
 use serde_json::json;
-use std::error::Error;
 use tokio::time::{self, Duration, Instant};
 use types::{Intersection, Points, Rain, Station};
 use xml2json_rs::JsonConfig;
@@ -21,17 +23,36 @@ const MODEL_NOISE: f64 = 0.01;
 const MAX_LAT: f64 = 60.0;
 const WAIT_TIME: u64 = 60;
 
-fn filter_observations(observations: &mut Vec<Station>) -> Vec<Station> {
-    observations
+async fn ingest_logs(error: &Error) -> Result<()> {
+    let client = axiom_rs::Client::new()?;
+    client
+        .datasets
+        .ingest(
+            "vercel",
+            vec![json!({
+                "message": error.to_string(),
+                "timestamp": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            })],
+        )
+        .await?;
+    Ok(())
+}
+
+fn filter_observations(observations: &mut Vec<Station>) -> Result<Vec<Station>> {
+    let filtered_observations = observations
         .drain(..)
         .filter(|observation| {
             observation.temperature.is_some()
                 && (observation.latitude.parse::<f64>().unwrap() < MAX_LAT)
         })
-        .collect()
+        .collect();
+    Ok(filtered_observations)
 }
 
-fn get_coordinates(stations: &Vec<Station>) -> Result<Vec<Vec<f64>>, Box<dyn Error>> {
+fn get_coordinates(stations: &Vec<Station>) -> Result<Vec<Vec<f64>>> {
     let mut coordinates = Vec::new();
     for station in stations {
         let lat = station.latitude.parse::<f64>()?;
@@ -41,7 +62,7 @@ fn get_coordinates(stations: &Vec<Station>) -> Result<Vec<Vec<f64>>, Box<dyn Err
     Ok(coordinates)
 }
 
-fn get_temperatures(stations: &Vec<Station>) -> Result<Vec<f64>, Box<dyn Error>> {
+fn get_temperatures(stations: &Vec<Station>) -> Result<Vec<f64>> {
     let mut temperatures = Vec::new();
     for station in stations {
         match &station.temperature {
@@ -49,12 +70,7 @@ fn get_temperatures(stations: &Vec<Station>) -> Result<Vec<f64>, Box<dyn Error>>
                 let temp = temp.parse::<f64>()?;
                 temperatures.push(temp);
             }
-            None => {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "No temperature found",
-                )));
-            }
+            None => continue,
         }
     }
     Ok(temperatures)
@@ -67,10 +83,7 @@ pub fn remap_y(curr: f64, max: f64, new_min: f64, new_max: f64) -> f64 {
     new_min + ((curr / max) * (new_max - new_min))
 }
 
-pub async fn store_intersection(
-    data: &Intersection,
-    client: &Client,
-) -> mongodb::error::Result<()> {
+pub async fn store_intersection(data: &Intersection, client: &Client) -> Result<()> {
     let database = client.database("weather-test");
     let collection = database.collection::<Intersection>("intersection");
     let inserted = collection.insert_one(data, None).await?;
@@ -81,7 +94,7 @@ pub async fn store_intersection(
     Ok(())
 }
 
-pub async fn store_points(data: &Points, client: &Client) -> mongodb::error::Result<()> {
+pub async fn store_points(data: &Points, client: &Client) -> Result<()> {
     let database = client.database("weather-test");
     let collection = database.collection::<Points>("points-data");
     let inserted = collection.insert_one(data, None).await?;
@@ -92,7 +105,7 @@ pub async fn store_points(data: &Points, client: &Client) -> mongodb::error::Res
     Ok(())
 }
 
-pub async fn get_mongo_client() -> Result<Client, Box<dyn Error>> {
+pub async fn get_mongo_client() -> Result<Client> {
     let user = std::env::var("MONGO_USER").unwrap();
     let password = std::env::var("MONGO_PASS").unwrap();
 
@@ -105,7 +118,7 @@ pub async fn get_mongo_client() -> Result<Client, Box<dyn Error>> {
     Ok(client)
 }
 
-pub async fn store_rain(data: &Rain, client: &Client) -> mongodb::error::Result<()> {
+pub async fn store_rain(data: &Rain, client: &Client) -> Result<()> {
     let database = client.database("weather-test");
     let collection = database.collection::<Rain>("rain-stats");
     let inserted = collection.insert_one(data, None).await?;
@@ -116,7 +129,7 @@ pub async fn store_rain(data: &Rain, client: &Client) -> mongodb::error::Result<
     Ok(())
 }
 
-pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Error>> {
+pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
     let mut max_point: Option<Feature> = None;
     let mut min_point: Option<Feature> = None;
 
@@ -145,7 +158,7 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Err
     let mut conditions: ConditionsWrapper = serde_json::from_value(val).unwrap();
 
     let current_observations =
-        filter_observations(&mut conditions.current_conditions.current_observation);
+        filter_observations(&mut conditions.current_conditions.current_observation)?;
 
     let points_data: Vec<Feature> = current_observations
         .iter()
@@ -201,7 +214,7 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Err
 
     match store_rain(&rain, client).await {
         Ok(_) => (),
-        Err(e) => println!("{}", e),
+        Err(e) => ingest_logs(&e).await?,
     }
 
     avg_temp /= reporting_count as f64;
@@ -221,12 +234,13 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>, Box<dyn Err
 
     match store_points(&points, client).await {
         Ok(_) => (),
-        Err(e) => println!("{}", e),
+        // Err(e) => println!("{:?}", e),
+        Err(e) => ingest_logs(&e).await?,
     }
     Ok(current_observations)
 }
 
-pub async fn compute(client: &Client) -> Result<(), Box<dyn Error>> {
+pub async fn compute(client: &Client) -> Result<()> {
     let island: Vec<[f64; 2]> = vec![
         [-125.67796453456866, 48.82645842964928],
         [-124.74626480947109, 48.53388081242173],
@@ -364,14 +378,15 @@ pub async fn compute(client: &Client) -> Result<(), Box<dyn Error>> {
     };
     match store_intersection(&fc, client).await {
         Ok(_) => (),
-        Err(e) => println!("{}", e),
+        Err(e) => ingest_logs(&e).await?,
     }
 
     Ok(())
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
+    dotenv().ok();
     let client = get_mongo_client().await?;
 
     let sleep = time::sleep(Duration::from_secs(WAIT_TIME));
@@ -387,7 +402,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let elapsed_time = now.elapsed();
                     println!("Database updated, took {} seconds", elapsed_time.as_secs());
                   },
-                  Err(e) => println!("{}", e),
+                  Err(e) => ingest_logs(&e).await?,
                 }
                 sleep.as_mut().reset(Instant::now() + Duration::from_secs(WAIT_TIME));
             },
