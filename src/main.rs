@@ -141,6 +141,7 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
 
     let mut rain_total = 0.0;
     let mut rain_reporting_count = 0;
+    let mut rain_currently_reporting_count = 0;
 
     let mut max_rain = 0.0;
     let mut max_rain_point: Option<Feature> = None;
@@ -187,6 +188,10 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
             if let Some(rain) = &x.rain {
                 let rain = rain.parse::<f64>().unwrap();
 
+                if rain > 0.0 {
+                    rain_reporting_count += 1;
+                }
+
                 if rain > max_rain {
                     max_rain = rain;
                     max_rain_point = Some(feat.clone());
@@ -196,7 +201,7 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
             if let Some(_rate) = &x.rain_rate {
                 let rate = _rate.parse::<f64>().unwrap();
                 if rate > 0.0 {
-                    rain_reporting_count += 1;
+                    rain_currently_reporting_count += 1;
                 }
             }
 
@@ -209,7 +214,7 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
     let rain = Rain {
         max_rain: max_rain_point,
         average_rain: avg_rain,
-        number_reporting: rain_reporting_count,
+        number_reporting: rain_currently_reporting_count,
     };
 
     match store_rain(&rain, client).await {
