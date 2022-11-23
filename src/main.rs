@@ -5,9 +5,7 @@ use axiom_rs;
 use contour::ContourBuilder;
 use dotenvy::dotenv;
 use friedrich::{gaussian_process::GaussianProcess, kernel::Exponential};
-use geo::{
-    BooleanOps, BoundingRect, Coordinate, LineString, MapCoords, MultiPolygon, Point, Polygon,
-};
+use geo::{BooleanOps, BoundingRect, Coord, LineString, MapCoords, MultiPolygon, Point, Polygon};
 use geojson::{Feature, FeatureCollection, Value};
 use iter_num_tools::{arange_grid, lin_space};
 use mongodb::{bson::doc, Client};
@@ -344,7 +342,7 @@ pub async fn compute(client: &Client) -> Result<()> {
 
             let mut multi: MultiPolygon = geo.value.try_into().unwrap();
 
-            multi = multi.map_coords(|Coordinate { x, y }| Coordinate {
+            multi = multi.map_coords(|Coord { x, y }| Coord {
                 x: remap_x(x, x_width as f64, min_x, max_x),
                 y: remap_y(y, y_width as f64, min_y, max_y),
             });

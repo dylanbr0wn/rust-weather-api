@@ -9,7 +9,7 @@ edition = "2021"
 colorgrad = "0.6.1"
 contour = "0.5.0"
 friedrich = "0.4.1"
-geo = "0.22.1"
+geo = "0.23.0"
 geojson = "0.23.0"
 iter_num_tools = "0.6.2"
 mongodb = {version = "2.3.0", features = ["tokio-sync"]}
