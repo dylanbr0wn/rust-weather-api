@@ -168,7 +168,12 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
             )));
             feat.properties = Some(json!(x).as_object().unwrap().to_owned());
 
-            let temp = x.temperature.as_ref().unwrap().parse::<f64>().unwrap();
+            let temp = x
+                .temperature
+                .as_ref()
+                .unwrap_or(&"".to_string())
+                .parse::<f64>()
+                .unwrap_or_default();
 
             feat.set_property("temperature", temp);
 
@@ -184,7 +189,7 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
             }
 
             if let Some(rain) = &x.rain {
-                let rain = rain.parse::<f64>().unwrap();
+                let rain = rain.parse::<f64>().unwrap_or_default();
 
                 if rain > 0.0 {
                     rain_reporting_count += 1;
@@ -197,7 +202,7 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
                 rain_total += rain;
             }
             if let Some(_rate) = &x.rain_rate {
-                let rate = _rate.parse::<f64>().unwrap();
+                let rate = _rate.parse::<f64>().unwrap_or_default();
                 if rate > 0.0 {
                     rain_currently_reporting_count += 1;
                 }
@@ -231,8 +236,8 @@ pub async fn compute_points(client: &Client) -> Result<Vec<Station>> {
     let points = Points {
         points: feat_col,
         average_temp: avg_temp,
-        min_point: min_point.unwrap(),
-        max_point: max_point.unwrap(),
+        min_point,
+        max_point,
     };
 
     match store_points(&points, client).await {
@@ -357,7 +362,11 @@ pub async fn compute(client: &Client) -> Result<()> {
             multi = BooleanOps::intersection(&MultiPolygon::new(vec![island_geo.clone()]), &multi);
 
             geo.value = Value::from(&multi);
-            let prop_temp = new_feat.property("value").unwrap().as_f64().unwrap();
+            let prop_temp = new_feat
+                .property("value")
+                .unwrap()
+                .as_f64()
+                .unwrap_or_default();
 
             new_feat.set_property(
                 "fill",

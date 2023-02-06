@@ -70,8 +70,8 @@ pub struct Intersection {
 pub struct Points {
     pub points: FeatureCollection,
     pub average_temp: f64,
-    pub max_point: Feature,
-    pub min_point: Feature,
+    pub max_point: Option<Feature>,
+    pub min_point: Option<Feature>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
