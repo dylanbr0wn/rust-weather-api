@@ -243,8 +243,6 @@ impl Mapper {
             .into_iter()
             .rev()
             .map(|mut feature| {
-                println!("{:?}", feature.geometry);
-                // let mut new_feat = feat;
                 let mut geo = feature.geometry.as_mut().unwrap();
 
                 let mut multi: MultiPolygon = geo.value.clone().try_into().unwrap();
@@ -279,8 +277,6 @@ impl Mapper {
                     g.at((prop_temp - min_temp) / (max_temp - min_temp))
                         .to_hex_string(),
                 );
-
-                println!("{:?}", feature.geometry);
 
                 feature
             })
