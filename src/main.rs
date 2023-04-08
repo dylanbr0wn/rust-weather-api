@@ -94,7 +94,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn store_points(&self, data: &Points) -> Result<()> {
+    pub async fn store_points(&self, data: Points) -> Result<()> {
         let collection = self.database.collection::<Points>("points-data");
         let inserted = collection.insert_one(data, None).await?;
         collection
@@ -104,7 +104,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn store_rain(&self, data: &Rain) -> Result<()> {
+    pub async fn store_rain(&self, data: Rain) -> Result<()> {
         let collection = self.database.collection::<Rain>("rain-stats");
         let inserted = collection.insert_one(data, None).await?;
         collection
@@ -242,17 +242,17 @@ impl Mapper {
         contour = contour
             .into_iter()
             .rev()
-            .map(|feat| {
-                let mut new_feat = feat;
-                let mut geo = new_feat.geometry.clone().unwrap();
+            .map(|mut feature| {
+                println!("{:?}", feature.geometry);
+                // let mut new_feat = feat;
+                let mut geo = feature.geometry.as_mut().unwrap();
 
-                let mut multi: MultiPolygon = geo.value.try_into().unwrap();
+                let mut multi: MultiPolygon = geo.value.clone().try_into().unwrap();
 
                 multi = multi.map_coords(|Coord { x, y }| Coord {
                     x: remap_x(x, x_width as f64, min_x, max_x),
                     y: remap_y(y, y_width as f64, min_y, max_y),
                 });
-
 
                 match &done {
                     Some(multi_done) => {
@@ -268,32 +268,36 @@ impl Mapper {
                     BooleanOps::intersection(&MultiPolygon::new(vec![island_geo.clone()]), &multi);
 
                 geo.value = Value::from(&multi);
-                let prop_temp = new_feat
+                let prop_temp = feature
                     .property("value")
                     .unwrap()
                     .as_f64()
                     .unwrap_or_default();
 
-                new_feat.set_property(
+                feature.set_property(
                     "fill",
                     g.at((prop_temp - min_temp) / (max_temp - min_temp))
                         .to_hex_string(),
                 );
 
-                new_feat.geometry = Some(geo);
+                println!("{:?}", feature.geometry);
 
-                new_feat
+                feature
             })
             .collect::<Vec<Feature>>();
 
-        match self.client.store_intersection(Intersection {
-          intersection: FeatureCollection {
-              bbox: Some(vec![min_x, min_y, max_x, max_y]),
-              // bbox: None,
-              features: contour,
-              foreign_members: None,
-          },
-      }).await {
+        match self
+            .client
+            .store_intersection(Intersection {
+                intersection: FeatureCollection {
+                    bbox: Some(vec![min_x, min_y, max_x, max_y]),
+                    // bbox: None,
+                    features: contour,
+                    foreign_members: None,
+                },
+            })
+            .await
+        {
             Ok(_) => (),
             Err(e) => self.logger.log(&e).await,
         }
@@ -388,35 +392,36 @@ impl Mapper {
 
         let avg_rain = rain_total / rain_reporting_count as f64;
 
-        let rain = Rain {
-            max_rain: max_rain_point,
-            average_rain: avg_rain,
-            number_reporting: rain_currently_reporting_count,
-        };
-
-        match self.client.store_rain(&rain).await {
+        match self
+            .client
+            .store_rain(Rain {
+                max_rain: max_rain_point,
+                average_rain: avg_rain,
+                number_reporting: rain_currently_reporting_count,
+            })
+            .await
+        {
             Ok(_) => (),
             Err(e) => self.logger.log(&e).await,
         }
 
         avg_temp /= reporting_count as f64;
 
-        let feat_col = FeatureCollection {
-            features: points_data,
-            bbox: None,
-            foreign_members: None,
-        };
-
-        let points = Points {
-            points: feat_col,
-            average_temp: avg_temp,
-            min_point,
-            max_point,
-        };
-
-        match self.client.store_points(&points).await {
+        match self
+            .client
+            .store_points(Points {
+                points: FeatureCollection {
+                    features: points_data,
+                    bbox: None,
+                    foreign_members: None,
+                },
+                average_temp: avg_temp,
+                min_point,
+                max_point,
+            })
+            .await
+        {
             Ok(_) => (),
-            // Err(e) => println!("{:?}", e),
             Err(e) => self.logger.log(&e).await,
         }
         Ok(current_observations)
@@ -424,23 +429,24 @@ impl Mapper {
 }
 
 fn filter_observations(observations: &mut Vec<Station>) -> Vec<Station> {
-    let filtered_observations = observations
+    observations
         .drain(..)
         .filter(|observation| {
             observation.temperature.is_some()
                 && (observation.latitude.parse::<f64>().unwrap_or_default() < MAX_LAT)
         })
-        .collect();
-    filtered_observations
+        .collect()
 }
 
 fn get_coordinates(stations: &Vec<Station>) -> Vec<Vec<f64>> {
-    stations.into_iter().map(|x| {
-        let lat = x.latitude.parse::<f64>().unwrap_or_default();
-        let lon = x.longitude.parse::<f64>().unwrap_or_default() - 360.0;
-        vec![lon, lat]
-    }).collect::<Vec<Vec<f64>>>()
-
+    stations
+        .into_iter()
+        .map(|x| {
+            let lat = x.latitude.parse::<f64>().unwrap_or_default();
+            let lon = x.longitude.parse::<f64>().unwrap_or_default() - 360.0;
+            vec![lon, lat]
+        })
+        .collect::<Vec<Vec<f64>>>()
 }
 
 fn get_temperatures(stations: &Vec<Station>) -> Result<Vec<f64>> {
