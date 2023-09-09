@@ -246,7 +246,7 @@ impl Mapper {
             .into_iter()
             .rev()
             .map(|mut feature| {
-                let mut multi = feature.geometry().to_owned();
+                let mut multi = feature.geometry();
 
                 multi.map_coords_in_place(|Coord { x, y }| Coord {
                     x: remap_x(x, x_width as f64, min_x, max_x),
@@ -255,7 +255,7 @@ impl Mapper {
 
                 match &done {
                     Some(multi_done) => {
-                        multi = BooleanOps::difference(&multi, multi_done);
+                        multi = BooleanOps::difference(&multi, &multi_done);
                         done = Some(BooleanOps::union(multi_done, &multi));
                     }
                     None => {
@@ -264,9 +264,8 @@ impl Mapper {
                 }
 
                 multi =
-                    BooleanOps::intersection(&MultiPolygon::new(vec![island_geo.clone()]), &multi);
+                    &BooleanOps::intersection(&MultiPolygon::new(vec![island_geo.clone()]), multi);
 
-                geometry.value = Value::from(&multi);
                 let prop_temp = feature
                     .property("value")
                     .unwrap()
