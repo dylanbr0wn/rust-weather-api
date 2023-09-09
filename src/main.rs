@@ -280,7 +280,7 @@ impl Mapper {
 
                 feature
             })
-            .collect::<Vec<Feature>>();
+            .collect::<Vec<Contour>>();
 
         match self
             .client
