@@ -5,7 +5,10 @@ use axiom_rs;
 use contour::{Contour, ContourBuilder};
 use dotenvy::dotenv;
 use friedrich::{gaussian_process::GaussianProcess, kernel::Exponential};
-use geo::{BooleanOps, BoundingRect, Coord, LineString, MultiPolygon, Point, Polygon};
+use geo::{
+    BooleanOps, BoundingRect, Coord, LineString, MapCoords, MapCoordsInPlace, MultiPolygon, Point,
+    Polygon,
+};
 use geojson::{Feature, FeatureCollection, Value};
 use iter_num_tools::{arange_grid, lin_space};
 use mongodb::{bson::doc, Client};
@@ -243,9 +246,9 @@ impl Mapper {
             .into_iter()
             .rev()
             .map(|mut feature| {
-                let mut multi = feature.geometry();
+                let mut multi = feature.geometry().to_owned();
 
-                multi = multi.map_coords(|Coord { x, y }| Coord {
+                multi.map_coords_in_place(|Coord { x, y }| Coord {
                     x: remap_x(x, x_width as f64, min_x, max_x),
                     y: remap_y(y, y_width as f64, min_y, max_y),
                 });
@@ -263,7 +266,7 @@ impl Mapper {
                 multi =
                     BooleanOps::intersection(&MultiPolygon::new(vec![island_geo.clone()]), &multi);
 
-                geo.value = Value::from(&multi);
+                geometry.value = Value::from(&multi);
                 let prop_temp = feature
                     .property("value")
                     .unwrap()
