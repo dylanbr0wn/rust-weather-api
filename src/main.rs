@@ -2,12 +2,11 @@ pub mod types;
 use crate::types::ConditionsWrapper;
 use anyhow::{Error, Result};
 use axiom_rs;
-use contour::{Contour, ContourBuilder};
+use contour::ContourBuilder;
 use dotenvy::dotenv;
 use friedrich::{gaussian_process::GaussianProcess, kernel::Exponential};
 use geo::{
-    BooleanOps, BoundingRect, Coord, LineString, MapCoords, MapCoordsInPlace, MultiPolygon, Point,
-    Polygon,
+    BooleanOps, BoundingRect, Coord, LineString, MapCoordsInPlace, MultiPolygon, Point, Polygon,
 };
 use geojson::{Feature, FeatureCollection, Value};
 use iter_num_tools::{arange_grid, lin_space};
@@ -237,50 +236,56 @@ impl Mapper {
             true,
         );
 
-        let mut contour = c.contours(&outputs, &steps).unwrap();
+        let contours = c.contours(&outputs, &steps).unwrap();
         let g = colorgrad::turbo();
 
         let mut done: Option<MultiPolygon> = None;
 
-        contour = contour
+        let features = contours
             .into_iter()
             .rev()
-            .map(|mut feature| {
-                let mut multi = feature.geometry();
-
-                multi.map_coords_in_place(|Coord { x, y }| Coord {
+            .map(|contour| {
+                let mut geometry = contour.geometry().to_owned();
+                geometry.map_coords_in_place(|Coord { x, y }| Coord {
                     x: remap_x(x, x_width as f64, min_x, max_x),
                     y: remap_y(y, y_width as f64, min_y, max_y),
                 });
 
                 match &done {
                     Some(multi_done) => {
-                        multi = BooleanOps::difference(&multi, &multi_done);
-                        done = Some(BooleanOps::union(multi_done, &multi));
+                        geometry = geometry.difference(multi_done);
+                        done = Some(multi_done.union(&geometry));
                     }
                     None => {
-                        done = Some(multi.clone());
+                        done = Some(geometry.clone());
                     }
                 }
 
-                multi =
-                    &BooleanOps::intersection(&MultiPolygon::new(vec![island_geo.clone()]), multi);
+                geometry = geometry.intersection(&MultiPolygon::new(vec![island_geo.clone()]));
 
-                let prop_temp = feature
-                    .property("value")
-                    .unwrap()
-                    .as_f64()
-                    .unwrap_or_default();
+                // multi =
+                // &BooleanOps::intersection(&MultiPolygon::new(vec![island_geo.clone()]), multi);
 
-                feature.set_property(
-                    "fill",
-                    g.at((prop_temp - min_temp) / (max_temp - min_temp))
-                        .to_hex_string(),
+                let prop_temp = contour.threshold();
+
+                let mut properties = serde_json::Map::new();
+                properties.insert(
+                    "fill".to_string(),
+                    serde_json::Value::String(
+                        g.at((prop_temp - min_temp) / (max_temp - min_temp))
+                            .to_hex_string(),
+                    ),
                 );
 
-                feature
+                Feature {
+                    bbox: None,
+                    geometry: Some(geojson::Geometry::new(geojson::Value::from(&geometry))),
+                    id: None,
+                    properties: Some(properties),
+                    foreign_members: None,
+                }
             })
-            .collect::<Vec<Contour>>();
+            .collect::<Vec<Feature>>();
 
         match self
             .client
@@ -288,7 +293,7 @@ impl Mapper {
                 intersection: FeatureCollection {
                     bbox: Some(vec![min_x, min_y, max_x, max_y]),
                     // bbox: None,
-                    features: contour,
+                    features,
                     foreign_members: None,
                 },
             })
