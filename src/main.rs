@@ -243,9 +243,7 @@ impl Mapper {
             .into_iter()
             .rev()
             .map(|mut feature| {
-                let mut geo = feature.geometry().as_mut().unwrap();
-
-                let mut multi: MultiPolygon = geo.value.clone().try_into().unwrap();
+                let mut multi = feature.geometry();
 
                 multi = multi.map_coords(|Coord { x, y }| Coord {
                     x: remap_x(x, x_width as f64, min_x, max_x),
